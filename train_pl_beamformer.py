@@ -32,30 +32,10 @@ transforms = torchvision.transforms.Compose([
      torchvision.transforms.ToTensor(),
 ])
 
-# train_dataset = MTIQ2Image(r'E:\us-data\train', 
-#                         imgs_dir = r'E:\us-data\train\imgs', 
-#                         cached_data_dir=r'E:\us-data\train\rf_angle_dim',
-#                         #files= ["INS002"],
-#                         files = [],
-#                         n_t=8, 
-#                         sub_sample_rate=1,
-#                         multi_angle=False,
-#                         n_angle_mode=False)
-
-# test_dataset = MTIQ2Image(r'E:\us-data\val', 
-#                      imgs_dir = r'E:\us-data\val\imgs', 
-#                      cached_data_dir=r'E:\us-data\val\rf_angle_dim',
-#                      #files= ["INS014"],
-#                      files = [],
-#                      n_t=8,
-#                      train=False,
-#                      multi_angle=False,
-#                      n_angle_mode=False)
 
 train_dataset = DespackleIQ2IMv2(r'E:\us-data\train', 
                         imgs_dir = r'E:\us-data\train_speckle\imgs_new_v2', 
                         cached_data_dir=r'E:\us-data\train\rf_angle_dim',
-                        #files= ["INS002"],
                         files = [],
                         n_t=8, 
                         sub_sample_rate=1,
@@ -65,7 +45,6 @@ train_dataset = DespackleIQ2IMv2(r'E:\us-data\train',
 test_dataset = DespackleIQ2IMv2(r'E:\us-data\val', 
                      imgs_dir = r'E:\us-data\val_speckle_images', 
                      cached_data_dir=r'E:\us-data\val\rf_angle_dim',
-                     #files= ["INS014"],
                      files = [],
                      n_t=8,
                      train=False,

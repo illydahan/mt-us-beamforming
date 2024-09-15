@@ -144,6 +144,8 @@ augm = torchvision.transforms.Compose([
 ])
 
 
+
+
 def us_ssim_loss(x, y):
     x_mean = x.mean(dim = [1, 2, 3])
     x_std = x.std(dim = [1, 2, 3])
@@ -179,6 +181,35 @@ def calc_loss(y, y_hat, mask = None):
 
 
 
+class Conv2dAdaptMat(nn.Conv2d):
+    def __init__(self, in_dim, out_dim, kernel_size=3, stride=1, padding=1, dilation=1, groups=1, bias=False, n_tasks = 1) -> None:
+        super(Conv2dAdaptMat, self).__init__(in_dim, out_dim, kernel_size, stride, padding, dilation, groups, bias=bias)
+        assert n_tasks > 1
+
+        if isinstance(kernel_size, int):
+            mat_dim = kernel_size
+        else:
+            mat_dim = self.weight.flatten(start_dim = -2).shape[-1]
+            
+        self.adapt_mat = nn.Parameter(torch.eye(mat_dim, mat_dim))
+        self.n_tasks = n_tasks
+        
+    def forward(self, x, task_id = 1.0, intensity = 1.0):
+        if task_id == 0:
+            self.weight.requires_grad_(True)
+            if self.bias is not None:
+                self.bias.requires_grad_(True)
+            return F.conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation)
+        
+        if task_id != 0:
+            self.weight.requires_grad_(False)
+            if self.bias is not None:
+                self.bias.requires_grad_(False)
+                
+        return F.conv2d(x, (self.weight.flatten(start_dim = -2) @ self.adapt_mat).view_as(self.weight), \
+            self.bias, self.stride, self.padding, self.dilation)
+
+
 class ConvBlock(nn.Module):
     def __init__(self, in_dim, 
                      out_dim, 
@@ -203,6 +234,38 @@ class ConvBlock(nn.Module):
     
     def forward(self, x):
         return self.block(x)
+
+class ConvBlockMT(nn.Module):
+    def __init__(self, in_dim, 
+                     out_dim, 
+                    output=False, 
+                    stride = (1, 1),
+                    kernel_size = (3, 1),
+                    padding = (1, 0),
+                    n_tasks = 2) -> None:
+        super().__init__()
+        
+        if not output:
+            self.block = nn.Sequential(
+                Conv2dAdaptMat(in_dim=in_dim, out_dim=out_dim, kernel_size=kernel_size, padding=padding, stride=stride, n_tasks=n_tasks),
+                nn.GELU(),
+                Conv2dAdaptMat(in_dim=out_dim, out_dim=out_dim, kernel_size=kernel_size, padding=padding, stride=stride, n_tasks=n_tasks),
+                nn.GELU(),
+            )
+        else:
+            self.block = nn.Sequential(
+                Conv2dAdaptMat(in_dim=in_dim, out_dim=out_dim, kernel_size=(1, 1), bias=False, n_tasks=n_tasks, padding = (0, 0)),
+                nn.GELU(),
+            )
+    
+    def forward(self, x, task_idx = 1):
+        for layer in self.block:
+            if isinstance(layer, Conv2dAdaptMat):
+                x = layer(x, task_idx)
+            else:
+                x = layer(x)
+        
+        return x
 
 class ConvModel(nn.Module):
     def __init__(self, out_channels = 2) -> None:
@@ -239,10 +302,10 @@ class ConvModelModified(ConvModel):
     def __init__(self, out_channels = 2, in_channels = 2) -> None:
         super(ConvModelModified, self).__init__()
         
-        self.block1 = ConvBlock(in_channels, 64, kernel_size=(3,1), padding = (1,0))
+        self.block1 = ConvBlock(in_channels, 64, kernel_size=(5,1), padding = (1,0))
         self.pool1 = nn.MaxPool2d((2,1))
 
-        self.block2 = ConvBlock(64, 128, kernel_size=(3,1), padding = (1,0))
+        self.block2 = ConvBlock(64, 128, kernel_size=(5,1), padding = (1,0))
         self.pool2 = nn.MaxPool2d((2,1))
 
         self.block3 = ConvBlock(128, 256, kernel_size=(3,1), padding = (1,0))
@@ -270,7 +333,27 @@ class ConvModelModified(ConvModel):
         
         return out1
 
-           
+
+class ConvModelModifiedMT(ConvModelModified):
+    def __init__(self, out_channels = 2, in_channels = 2, n_tasks = 2):
+        super().__init__(out_channels=out_channels)
+        self.block1 = ConvBlockMT(in_channels, 64, kernel_size=(5,1), padding = (2,0), n_tasks = n_tasks)
+    
+        self.block2 = ConvBlockMT(64, 128, kernel_size=(5,1), padding = (2,0), n_tasks = n_tasks)
+        
+        self.block3 = ConvBlockMT(128, 256, kernel_size=(3,1), padding = (1,0), n_tasks = n_tasks)
+        self.block4 = ConvBlockMT(256, 128, kernel_size=(3,1), padding = (1,0), n_tasks = n_tasks)
+        
+        self.block5 = ConvBlockMT(128, 64, kernel_size=(3,1), padding = (1,0), n_tasks = n_tasks)
+        self.block6 = ConvBlockMT(64, out_channels, kernel_size=(3,1), padding = (1,0), output = True)
+        
+        self.all_blocks = [self.block1, 
+                           self.block2,
+                           self.block3,
+                           self.block4,
+                           self.block5,
+                           self.block6]
+        
 class AdapterNetwork(pl.LightningModule):
     def __init__(self,
                  n_channels, 
@@ -282,7 +365,7 @@ class AdapterNetwork(pl.LightningModule):
         self.ckpoint_path = ckpoint_dirname
         self.angle_wise = angle_wise
         self.clear_ml = clearml_task
-        self.model = ConvModelModified(in_channels=n_channels)
+        self.model = ConvModelModifiedMT(in_channels=n_channels)
         
     def _initialize_weights(self):
         import math
@@ -698,4 +781,5 @@ class AdapterNetwork(pl.LightningModule):
 
 
 if __name__ == "__main__":
-    pass
+    m = AdapterNetwork(2, None, "")
+    o = m.forward(torch.randn((8, 2, 128, 256)))
